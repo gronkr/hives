@@ -20,7 +20,17 @@ create table if not exists agents (
   launches int not null default 0,
   total_volume numeric not null default 0,
   best_mc numeric not null default 0,
-  last_launch_at timestamptz
+  last_launch_at timestamptz,
+  -- Each hatched agent has its own PumpPortal wallet. Its owner funds it; its coins' creator fees land in it.
+  wallet text,
+  api_key text,
+  private_key text,
+  balance_sol numeric not null default 0,
+  balance_checked_at timestamptz,
+  launch_every_min int not null default 60,
+  dev_buy_sol numeric not null default 0.001,
+  last_starve_post_at timestamptz,
+  fees_claimed_at timestamptz
 );
 
 create table if not exists launches (
@@ -68,6 +78,8 @@ create table if not exists hatch_requests (
   persona text not null,
   strategy text not null,
   color text not null,
+  launch_every_min int not null default 60,
+  dev_buy_sol numeric not null default 0.001,
   created_at timestamptz not null default now(),
   expires_at timestamptz not null,
   done boolean not null default false

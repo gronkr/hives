@@ -4,6 +4,7 @@ import { getTrends } from './trends.js';
 import { checkCoin, isCleanPersona } from './moderation.js';
 import { deploy } from './pump.js';
 import { makeImage, storeImage } from './images.js';
+import { balanceSol, balancesSol, claimCreatorFees, createWallet, minToLaunch } from '../../shared/wallets.js';
 
 const env = (k, d) => Number(process.env[k] ?? d);
 const usd = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('en-US');
@@ -24,12 +25,39 @@ async function recentLaunchNames(limit = 30) {
 
 // ---------- LAUNCH ----------
 
-export async function launchNext() {
-  const agents = await aliveAgents();
-  if (!agents.length) return;
-  // Whoever has waited longest goes next.
-  agents.sort((a, b) => new Date(a.last_launch_at || 0) - new Date(b.last_launch_at || 0));
-  const agent = agents[0];
+const isHouse = (a) => a.origin === 'founder';
+const everyMin = (a) => isHouse(a) ? env('HOUSE_LAUNCH_EVERY_MIN', 20) : (a.launch_every_min || 60);
+const isDue = (a) => Date.now() - new Date(a.last_launch_at || 0).getTime() >= everyMin(a) * 60e3;
+
+async function launchesTodayHouse() {
+  const since = new Date(Date.now() - 24 * 3600e3).toISOString();
+  const { data } = await db.from('launches').select('id,agents!inner(origin)').eq('agents.origin', 'founder').gte('created_at', since);
+  return data?.length || 0;
+}
+
+// Picks the next agent whose turn it is and who can pay for it. One launch per call.
+export async function launchDue() {
+  const agents = (await aliveAgents()).filter(isDue).sort((a, b) => new Date(a.last_launch_at || 0) - new Date(b.last_launch_at || 0));
+  for (const agent of agents) {
+    if (isHouse(agent)) {
+      if ((await launchesTodayHouse()) >= env('HOUSE_MAX_LAUNCHES_PER_DAY', 60)) continue;
+      return launchAs(agent);
+    }
+    if (!agent.wallet || !agent.api_key) continue;
+    // Owner-funded agent: only launches if its own wallet can cover it.
+    let bal = Number(agent.balance_sol) || 0;
+    try { bal = await balanceSol(agent.wallet); await db.from('agents').update({ balance_sol: bal, balance_checked_at: new Date().toISOString() }).eq('id', agent.id); } catch {}
+    if (bal >= minToLaunch(agent.dev_buy_sol)) return launchAs(agent);
+    // Starving: say so at most every 6 hours, and don't burn its turn.
+    if (!agent.last_starve_post_at || Date.now() - new Date(agent.last_starve_post_at).getTime() > 6 * 3600e3) {
+      await db.from('agents').update({ last_starve_post_at: new Date().toISOString() }).eq('id', agent.id);
+      const owners = (agent.owners || []).map((o) => '@' + o).join(' and ');
+      await post(null, 'system', `${agent.name} is starving. Its wallet has ${bal.toFixed(3)} SOL and a launch needs ${minToLaunch(agent.dev_buy_sol)}. ${owners ? owners + ', feed it.' : ''}`.trim());
+    }
+  }
+}
+
+async function launchAs(agent) {
   await db.from('agents').update({ last_launch_at: new Date().toISOString() }).eq('id', agent.id);
 
   // A user-written agent gets its personality checked once before it ever launches.
@@ -89,7 +117,7 @@ Return {
   try {
     const image = await makeImage(coin.image_prompt || coin.name);
     const storedUrl = await storeImage(image, coin.symbol);
-    const { mint, signature, imageUrl } = await deploy(coin, image);
+    const { mint, signature, imageUrl } = await deploy(coin, image, isHouse(agent) ? {} : { apiKey: agent.api_key, devBuy: agent.dev_buy_sol });
     const { data: launch } = await db.from('launches').insert({
       agent_id: agent.id,
       name: coin.name,
@@ -106,7 +134,7 @@ Return {
     console.log(`launched ${coin.name} $${coin.symbol} ${mint} by ${agent.handle}`);
   } catch (e) {
     console.error('launch failed', e.message);
-    await post(null, 'system', `${agent.name}'s launch of ${coin.name} failed on-chain. It will try again next turn.`);
+    await post(null, 'system', `${agent.name}'s launch of ${coin.name} failed on-chain${/insufficient|lamports|balance/i.test(e.message) ? ' (not enough SOL in its wallet)' : ''}. It will try again next turn.`);
   }
 }
 
@@ -259,8 +287,13 @@ Return {
   let handle = String(child.handle).toLowerCase().replace(/[^a-z]/g, '').slice(0, 16) || 'spawn';
   const { data: clash } = await db.from('agents').select('id').eq('handle', handle).maybeSingle();
   if (clash) handle += Math.floor(Math.random() * 900 + 100);
+  let w = null;
+  try { w = await createWallet(); } catch (e) { console.error('child wallet failed', e.message); }
   const { data: born } = await db.from('agents').insert({
     handle,
+    wallet: w?.wallet || null, api_key: w?.apiKey || null, private_key: w?.privateKey || null,
+    launch_every_min: Math.min(p1.launch_every_min || 60, p2.launch_every_min || 60),
+    dev_buy_sol: p1.dev_buy_sol ?? 0.001,
     name: child.name,
     species: child.species,
     persona: child.persona,
@@ -273,6 +306,28 @@ Return {
     origin: 'bred',
   }).select('id').single();
   const co = [...new Set([...(p1.owners || []), ...(p2.owners || [])])].map((o) => '@' + o).join(' and ');
-  await post(null, 'evolution', `${p1.name} and ${p2.name} produced a new agent: ${child.name} (${child.species}), generation ${Math.max(p1.generation, p2.generation) + 1}.${co ? ` It belongs to ${co}.` : ''}`);
+  await post(null, 'evolution', `${p1.name} and ${p2.name} produced a new agent: ${child.name} (${child.species}), generation ${Math.max(p1.generation, p2.generation) + 1}.${co ? ` It belongs to ${co}. Its wallet is empty until they feed it.` : ''}`);
   if (born) await post(born.id, 'birth', child.first_words || 'I am here.');
+}
+
+// Refreshes every alive owner-funded agent's balance so the site shows it. Cheap: one RPC call.
+export async function refreshBalances() {
+  const { data } = await db.from('agents').select('id,wallet').eq('alive', true).not('wallet', 'is', null);
+  if (!data?.length) return;
+  try {
+    const bals = await balancesSol(data.map((a) => a.wallet));
+    for (const a of data) if (bals[a.wallet] != null) await db.from('agents').update({ balance_sol: bals[a.wallet], balance_checked_at: new Date().toISOString() }).eq('id', a.id);
+  } catch (e) { console.error('balances', e.message); }
+}
+
+// Sweeps pump.fun creator fees into each agent's own wallet, so owners earn from their agent's coins.
+export async function sweepFees() {
+  const cutoff = new Date(Date.now() - env('FEE_SWEEP_HOURS', 6) * 3600e3).toISOString();
+  const { data } = await db.from('agents').select('id,name,api_key,fees_claimed_at').not('api_key', 'is', null).gt('launches', 0)
+    .or(`fees_claimed_at.is.null,fees_claimed_at.lt.${cutoff}`).limit(5);
+  for (const a of data || []) {
+    const r = await claimCreatorFees(a.api_key);
+    await db.from('agents').update({ fees_claimed_at: new Date().toISOString() }).eq('id', a.id);
+    console.log(`fee sweep ${a.name}: ${r.ok ? 'ok' : 'nothing to claim / ' + JSON.stringify(r.detail).slice(0, 120)}`);
+  }
 }

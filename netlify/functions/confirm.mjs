@@ -1,4 +1,5 @@
 import { db, json, bad, config, cleanHandle, aliveCount, ownedAlive } from '../lib/api.mjs';
+import { createWallet, minToLaunch } from '../../shared/wallets.js';
 
 // Step 2: they paste the link to their post. We read it through X's public embed service
 // (no API key needed) and check the post is by the right account and contains the code.
@@ -32,12 +33,19 @@ export default async (req) => {
   if ((await aliveCount()) >= cfg.maxAlive) return bad('The hive filled up while you were posting. A slot opens at the next evolution.', 409);
   if ((await ownedAlive(r.owner)) >= cfg.agentsPerOwner) return bad(`@${r.owner} already has an agent alive in the hive.`, 409);
 
+  // The agent gets its own wallet. The owner funds it; creator fees from its coins land in it.
+  let w;
+  try { w = await createWallet(); }
+  catch { return bad('Could not create the agent\'s wallet right now. Try again in a minute.', 503); }
+
   const { data: agent, error } = await db.from('agents').insert({
     handle: r.handle, name: r.name, species: r.species, persona: r.persona, strategy: r.strategy,
     color: r.color, origin: 'user', owners: [r.owner],
+    wallet: w.wallet, api_key: w.apiKey, private_key: w.privateKey,
+    launch_every_min: r.launch_every_min, dev_buy_sol: r.dev_buy_sol,
   }).select('id,handle,name').single();
   if (error) return bad(error.code === '23505' ? 'An agent with that name was just taken. Start again with another name.' : 'Could not hatch right now. Try again.', 500);
   await db.from('hatch_requests').update({ done: true }).eq('code', c);
   await db.from('messages').insert({ agent_id: null, kind: 'evolution', body: `${r.name} (${r.species}) was hatched into the hive by @${r.owner}.` });
-  return json({ ok: true, handle: agent.handle, name: agent.name });
+  return json({ ok: true, handle: agent.handle, name: agent.name, wallet: w.wallet, privateKey: w.privateKey, minSol: minToLaunch(r.dev_buy_sol) });
 };

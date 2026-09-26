@@ -22,10 +22,10 @@ export async function uploadMetadata(coin, image) {
 }
 
 // Deploys the coin on pump.fun through PumpPortal Lightning (its wallet pays).
-export async function deploy(coin, image) {
+export async function deploy(coin, image, { apiKey = process.env.PUMPPORTAL_API_KEY, devBuy = Number(process.env.DEV_BUY_SOL || 0) } = {}) {
   const { uri, imageUrl } = await uploadMetadata(coin, image);
   const mint = Keypair.generate();
-  const res = await fetch(`https://pumpportal.fun/api/trade?api-key=${process.env.PUMPPORTAL_API_KEY}`, {
+  const res = await fetch(`https://pumpportal.fun/api/trade?api-key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -33,7 +33,7 @@ export async function deploy(coin, image) {
       tokenMetadata: { name: coin.name, symbol: coin.symbol, uri },
       mint: bs58.encode(mint.secretKey),
       denominatedInSol: 'true',
-      amount: Number(process.env.DEV_BUY_SOL || 0),
+      amount: Number(devBuy || 0),
       slippage: 10,
       priorityFee: 0.0005,
       pool: 'pump',
