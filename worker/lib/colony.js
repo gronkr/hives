@@ -26,7 +26,7 @@ async function recentLaunchNames(limit = 30) {
 // ---------- LAUNCH ----------
 
 const isHouse = (a) => a.origin === 'founder';
-const everyMin = (a) => isHouse(a) ? env('HOUSE_LAUNCH_EVERY_MIN', 20) : (a.launch_every_min || 60);
+const everyMin = (a) => isHouse(a) ? env('HOUSE_LAUNCH_EVERY_MIN', 20) : Math.max(env('MIN_LAUNCH_EVERY_MIN', 5), a.launch_every_min || 60);
 const isDue = (a) => Date.now() - new Date(a.last_launch_at || 0).getTime() >= everyMin(a) * 60e3;
 
 async function launchesTodayHouse() {
@@ -35,27 +35,36 @@ async function launchesTodayHouse() {
   return data?.length || 0;
 }
 
-// Picks the next agent whose turn it is and who can pay for it. One launch per call.
-export async function launchDue() {
-  const agents = (await aliveAgents()).filter(isDue).sort((a, b) => new Date(a.last_launch_at || 0) - new Date(b.last_launch_at || 0));
+// Returns up to `limit` agents whose turn it is and who can pay for it, skipping ones already launching.
+export async function pickDue(limit, busy = new Set()) {
+  const agents = (await aliveAgents()).filter((a) => isDue(a) && !busy.has(a.id))
+    .sort((a, b) => new Date(a.last_launch_at || 0) - new Date(b.last_launch_at || 0));
+  const picked = [];
+  let houseToday = null;
+  const walletsToCheck = agents.filter((a) => !isHouse(a) && a.wallet && a.api_key);
+  let bals = {};
+  try { bals = await balancesSol(walletsToCheck.map((a) => a.wallet)); } catch {}
   for (const agent of agents) {
+    if (picked.length >= limit) break;
     if (isHouse(agent)) {
-      if ((await launchesTodayHouse()) >= env('HOUSE_MAX_LAUNCHES_PER_DAY', 60)) continue;
-      return launchAs(agent);
+      if (houseToday === null) houseToday = await launchesTodayHouse();
+      if (houseToday >= env('HOUSE_MAX_LAUNCHES_PER_DAY', 60)) continue;
+      houseToday++; picked.push(agent); continue;
     }
     if (!agent.wallet || !agent.api_key) continue;
-    // Owner-funded agent: only launches if its own wallet can cover it.
-    let bal = Number(agent.balance_sol) || 0;
-    try { bal = await balanceSol(agent.wallet); await db.from('agents').update({ balance_sol: bal, balance_checked_at: new Date().toISOString() }).eq('id', agent.id); } catch {}
-    if (bal >= minToLaunch(agent.dev_buy_sol)) return launchAs(agent);
+    const bal = bals[agent.wallet] ?? (Number(agent.balance_sol) || 0);
+    if (bal >= minToLaunch(agent.dev_buy_sol)) { picked.push(agent); continue; }
     // Starving: say so at most every 6 hours, and don't burn its turn.
     if (!agent.last_starve_post_at || Date.now() - new Date(agent.last_starve_post_at).getTime() > 6 * 3600e3) {
-      await db.from('agents').update({ last_starve_post_at: new Date().toISOString() }).eq('id', agent.id);
+      await db.from('agents').update({ last_starve_post_at: new Date().toISOString(), balance_sol: bal }).eq('id', agent.id);
       const owners = (agent.owners || []).map((o) => '@' + o).join(' and ');
       await post(null, 'system', `${agent.name} is starving. Its wallet has ${bal.toFixed(3)} SOL and a launch needs ${minToLaunch(agent.dev_buy_sol)}. ${owners ? owners + ', feed it.' : ''}`.trim());
     }
   }
+  return picked;
 }
+
+export async function launchAgent(agent) { return launchAs(agent); }
 
 async function launchAs(agent) {
   await db.from('agents').update({ last_launch_at: new Date().toISOString() }).eq('id', agent.id);
@@ -115,7 +124,7 @@ Return {
   }
 
   try {
-    const image = await makeImage(coin.image_prompt || coin.name);
+    const image = await makeImage(coin.image_prompt || coin.name, { free: !isHouse(agent) && String(process.env.USER_IMAGE_MODE || 'paid').toLowerCase() === 'free' });
     const storedUrl = await storeImage(image, coin.symbol);
     const { mint, signature, imageUrl } = await deploy(coin, image, isHouse(agent) ? {} : { apiKey: agent.api_key, devBuy: agent.dev_buy_sol });
     const { data: launch } = await db.from('launches').insert({
@@ -266,7 +275,7 @@ async function kill(v) {
 }
 
 async function breed(p1, p2, aliveNow) {
-  if (aliveNow >= env('MAX_ALIVE', 24)) { await post(null, 'evolution', `${p1.name} and ${p2.name} were chosen to breed, but the hive is full. No child this time.`); return; }
+  if (aliveNow >= env('MAX_ALIVE', 100)) { await post(null, 'evolution', `${p1.name} and ${p2.name} were chosen to breed, but the hive is full. No child this time.`); return; }
   const child = await think(
     'You design new AI agents for Hives by combining two successful parents. The child must be a new, distinct character, not a copy.',
     `Parent A: ${JSON.stringify({ name: p1.name, species: p1.species, persona: p1.persona, strategy: p1.strategy, lessons: p1.lessons })}

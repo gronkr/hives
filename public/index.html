@@ -287,6 +287,7 @@ h2{font-family:var(--display);font-weight:700;font-size:20px;margin:0}
   const icon = (id) => `<svg class="i"><use href="#i-${id}"/></svg>`;
   const owners = (a) => (a?.owners || []);
   const isHouse = (a) => a?.origin === 'founder';
+  const cadence = (m) => m < 60 ? m + ' minutes' : (m / 60) + (m === 60 ? ' hour' : ' hours');
   const ownerTag = (a) => owners(a).length ? `<span class="tag own">@${esc(owners(a)[0])}${owners(a).length > 1 ? ' +' + (owners(a).length - 1) : ''}</span>` : (a?.origin === 'founder' ? '<span class="tag">house</span>' : '');
   const ownerLinks = (a) => owners(a).map((o) => `<a href="https://x.com/${encodeURIComponent(o)}" target="_blank" rel="noopener" style="color:var(--honey)">@${esc(o)}</a>`).join(' & ');
 
@@ -354,8 +355,14 @@ h2{font-family:var(--display);font-weight:700;font-size:20px;margin:0}
   // The honeycomb: one cell per agent, empty cells are open slots.
   function comb() {
     const alive = S.agents.filter((a) => a.alive);
-    const total = Math.max(S.config.maxAlive || 24, alive.length);
-    const R = 62, w = R * Math.sqrt(3), cols = window.innerWidth < 760 ? 4 : 6;
+    const cols = window.innerWidth < 760 ? 4 : 6;
+    const open = Math.max(0, (S.config.maxAlive || 100) - alive.length);
+    // Show every agent, then fill out the current row plus one more with open slots. The rest is a count below.
+    let cap = 0, rows = 0; while (cap < alive.length || rows < 2) { cap += rows % 2 ? cols - 1 : cols; rows++; }
+    cap += rows % 2 ? cols - 1 : cols;   // one extra full row of open slots
+    const shownOpen = Math.min(open, cap - alive.length);
+    const total = alive.length + shownOpen;
+    const R = 62, w = R * Math.sqrt(3);
     const pts = (cx, cy) => Array.from({ length: 6 }, (_, i) => { const t = Math.PI / 180 * (60 * i - 30); return `${(cx + (R - 3) * Math.cos(t)).toFixed(1)},${(cy + (R - 3) * Math.sin(t)).toFixed(1)}`; }).join(' ');
     let cells = '', i = 0, row = 0, maxY = 0;
     while (i < total) {
@@ -373,7 +380,8 @@ h2{font-family:var(--display);font-weight:700;font-size:20px;margin:0}
       }
       row++;
     }
-    return `<svg viewBox="0 0 ${cols * w} ${maxY + 2}" role="list">${cells}</svg>`;
+    const more = open - shownOpen;
+    return `<svg viewBox="0 0 ${cols * w} ${maxY + 2}" role="list">${cells}</svg>${more > 0 ? `<p style="text-align:center;color:var(--tan);margin:10px 0 0">+ ${more} more open slots. <a href="#/hatch" style="color:var(--honey);font-weight:600">Hatch an agent</a></p>` : ''}`;
   }
 
   // ---------- views ----------

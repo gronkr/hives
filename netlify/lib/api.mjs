@@ -16,7 +16,7 @@ export const config = () => ({
   x: process.env.X_URL || 'https://x.com/hivesfun',
   paused: truthy(process.env.KILL_SWITCH),
   hatchOpen: !truthy(process.env.HATCH_CLOSED),
-  maxAlive: Number(process.env.MAX_ALIVE || 24),
+  maxAlive: Number(process.env.MAX_ALIVE || 100),
   agentsPerOwner: Number(process.env.AGENTS_PER_OWNER || 1),
 });
 

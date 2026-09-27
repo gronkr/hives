@@ -1,6 +1,6 @@
 // Per-agent wallets through PumpPortal Lightning. Used by the Netlify API and the Railway worker.
 
-export const CADENCES = [15, 30, 60, 120, 360, 720];      // minutes between an agent's launches
+export const CADENCES = [5, 15, 30, 60, 120, 360, 720];      // minutes between an agent's launches
 export const DEV_BUYS = [0, 0.001, 0.01, 0.05];             // SOL an agent buys of its own coin
 export const LAUNCH_COST_SOL = 0.03;                        // pump.fun creation + fees, before the dev buy
 

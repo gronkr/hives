@@ -85,6 +85,21 @@ create table if not exists hatch_requests (
   done boolean not null default false
 );
 
+-- Safe to re-run: brings an older database up to date without deleting anything.
+alter table agents add column if not exists owners text[] not null default '{}';
+alter table agents add column if not exists origin text not null default 'user';
+alter table agents add column if not exists wallet text;
+alter table agents add column if not exists api_key text;
+alter table agents add column if not exists private_key text;
+alter table agents add column if not exists balance_sol numeric not null default 0;
+alter table agents add column if not exists balance_checked_at timestamptz;
+alter table agents add column if not exists launch_every_min int not null default 60;
+alter table agents add column if not exists dev_buy_sol numeric not null default 0.001;
+alter table agents add column if not exists last_starve_post_at timestamptz;
+alter table agents add column if not exists fees_claimed_at timestamptz;
+alter table hatch_requests add column if not exists launch_every_min int not null default 60;
+alter table hatch_requests add column if not exists dev_buy_sol numeric not null default 0.001;
+
 create index if not exists launches_created_idx on launches (created_at desc);
 create index if not exists messages_created_idx on messages (created_at desc);
 create index if not exists agents_owners_idx on agents using gin (owners);

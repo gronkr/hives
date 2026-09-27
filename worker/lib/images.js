@@ -67,7 +67,12 @@ async function pollinationsImage(prompt) {
 }
 
 // Generates the coin image: OpenRouter first, Pollinations as a backup.
-export async function makeImage(prompt) {
+// { free: true } skips the paid model entirely (USER_IMAGE_MODE=free for owner-funded agents).
+export async function makeImage(prompt, { free = false } = {}) {
+  if (free) {
+    try { return await pollinationsImage(prompt); }
+    catch (e) { console.error('free image failed, using paid model:', e.message); return await openrouterImage(prompt); }
+  }
   try {
     return await openrouterImage(prompt);
   } catch (e) {
