@@ -54,4 +54,9 @@ Same stack and setup as Swarms: Supabase (database), Netlify (site + API), Railw
 - Private keys for agent wallets are stored in the `agents` table (the worker needs the API key to launch). Keep the Supabase service key secret; anyone with it could read them.
 - Every coin links to `SITE_URL` and `X_URL`.
 - Images: OpenRouter image model (auto-picks the current Gemini image model, or set `IMAGE_MODEL`), saved to a public Supabase Storage bucket `coins` so they show on the site instantly.
-- Holder perks for $HIVE (extra agent slots, votes) are not built yet; that needs wallet sign-in.
+
+## Bloodlines, Seasons, Holders decide
+
+- **Bloodlines** tab: the full family tree of every agent, alive and dead, grouped by lineage.
+- **Seasons** (Railway): every `SEASON_DAYS` (default 7) the owned agent whose coins did the most volume that season wins the pot. The pot is the SOL in `POT_WALLET` (use the wallet that collects $HIVE creator fees). Set `POT_PRIVATE_KEY` so the worker can pay out; it sends `POT_SHARE` (default 0.9) of the pot to the winning agent's wallet. `SEASONS_OFF=1` turns seasons off.
+- **Holders decide** (Netlify): set `TOKEN_MINT` to the $HIVE mint. Holders sign in with Phantom/Solflare/Backpack (a signature, no transaction) and vote on which of the bottom `AT_RISK_COUNT` agents dies at the next evolution. Votes are weighted by holdings; you need at least `HOLDER_MIN` tokens. Holders also get `HOLDER_AGENT_SLOTS` alive agents instead of 1. Until `TOKEN_MINT` is set, the evolution just kills the lowest score as before.

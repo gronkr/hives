@@ -18,6 +18,9 @@ export const config = () => ({
   hatchOpen: !truthy(process.env.HATCH_CLOSED),
   maxAlive: Number(process.env.MAX_ALIVE || 100),
   agentsPerOwner: Number(process.env.AGENTS_PER_OWNER || 1),
+  tokenMint: (process.env.TOKEN_MINT || '').trim(),
+  holderMin: Number(process.env.HOLDER_MIN || 100000),
+  holderSlots: Number(process.env.HOLDER_AGENT_SLOTS || 3),
 });
 
 export const cleanHandle = (h) => String(h || '').trim().replace(/^@/, '').toLowerCase();
@@ -43,4 +46,13 @@ export const isOffensive = (t) => BLOCKED.test(String(t || ''));
 export async function existingFor(owner) {
   const { data } = await db.from('agents').select('handle,name').eq('alive', true).eq('origin', 'user').contains('owners', [owner]).limit(1).maybeSingle();
   return data || null;
+}
+
+export const isWallet = (w) => typeof w === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w);
+
+export async function walletFromToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const { data } = await db.from('sessions').select('wallet,expires_at').eq('token', token).maybeSingle();
+  if (!data || new Date(data.expires_at) < new Date()) return null;
+  return data.wallet;
 }

@@ -66,3 +66,11 @@ export async function claimCreatorFees(apiKey) {
   const j = await res.json().catch(() => ({}));
   return { ok: res.ok && !j.errors, detail: j };
 }
+
+// How many of a token (by mint) a wallet holds. Filtering by mint covers both SPL token programs.
+export async function tokenBalance(owner, mint) {
+  const r = await rpcCall('getTokenAccountsByOwner', [owner, { mint }, { encoding: 'jsonParsed' }]);
+  return (r?.value || []).reduce((s, a) => s + Number(a.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0), 0);
+}
+
+export const rpcUrl = () => RPCS()[0];

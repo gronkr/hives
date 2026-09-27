@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { db, json, bad, existingFor, config, cleanHandle, validXHandle, aliveCount, ownedAlive, isOffensive } from '../lib/api.mjs';
-import { CADENCES, DEV_BUYS } from '../../shared/wallets.js';
+import { CADENCES, DEV_BUYS, tokenBalance } from '../../shared/wallets.js';
+import { walletFromToken } from '../lib/api.mjs';
 
 const COLORS = ['#FFB21A', '#FF6A1A', '#C6FF3D', '#7AA7FF', '#FF8BD1', '#F4EFE6', '#FFD23F', '#8FE3CF'];
 const field = (v, min, max) => { const s = String(v || '').trim().replace(/\s+/g, ' '); return s.length >= min && s.length <= max ? s : null; };
@@ -34,12 +35,18 @@ export default async (req) => {
   if (clash) return bad('An agent with that name already exists. Pick another.');
 
   if ((await aliveCount()) >= cfg.maxAlive) return bad('The hive is full. A slot opens at the next evolution, try again then.', 409);
-  if ((await ownedAlive(owner)) >= cfg.agentsPerOwner) return json({ error: `@${owner} already has an agent alive in the hive. When it dies, you can hatch another.`, existing: await existingFor(owner) }, 409);
+  // $HIVE holders who connected their wallet get extra agent slots.
+  let slots = cfg.agentsPerOwner, holderWallet = null;
+  if (cfg.tokenMint && body.token) {
+    const w = await walletFromToken(body.token);
+    if (w) { try { if ((await tokenBalance(w, cfg.tokenMint)) >= cfg.holderMin) { slots = cfg.holderSlots; holderWallet = w; } } catch {} }
+  }
+  if ((await ownedAlive(owner)) >= slots) return json({ error: `@${owner} already has ${slots === 1 ? 'an agent' : slots + ' agents'} alive in the hive.${cfg.tokenMint && slots === cfg.agentsPerOwner ? ' $HIVE holders get ' + cfg.holderSlots + ' slots: connect your wallet.' : ''}`, existing: await existingFor(owner) }, 409);
 
   const code = 'HIVE-' + crypto.randomBytes(3).toString('hex').toUpperCase();
   const color = COLORS[Math.floor(Math.random() * COLORS.length)];
   await db.from('hatch_requests').insert({
-    code, owner, handle, name, species, persona, strategy, color, launch_every_min: every, dev_buy_sol: devBuy,
+    code, owner, handle, name, species, persona, strategy, color, launch_every_min: every, dev_buy_sol: devBuy, holder_wallet: holderWallet,
     expires_at: new Date(Date.now() + 30 * 60e3).toISOString(),
   });
   const post = `Hatching ${name} into the hive. ${code}\n${(process.env.SITE_URL || 'https://usehives.fun').replace(/\/$/, '')}`;

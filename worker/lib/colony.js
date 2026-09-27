@@ -212,23 +212,9 @@ Return {
 
 // ---------- EVOLVE ----------
 
-export async function evolveIfDue() {
-  const last = await getState('last_evolve', null);
-  const every = env('EVOLVE_EVERY_HOURS', 24) * 3600e3;
-  if (!last) {
-    await setState('last_evolve', new Date().toISOString());
-    await setState('next_evolve_at', new Date(Date.now() + every).toISOString());
-    return;
-  }
-  // Keep the site's evolution timer in sync even if the interval setting changed.
-  await setState('next_evolve_at', new Date(new Date(last).getTime() + every).toISOString());
-  if (Date.now() - new Date(last).getTime() < every) return;
-
-  const agents = await aliveAgents();
-  if (agents.length < env('MIN_ALIVE', 4)) return;
-
-  // Rank agents by the average score of their debriefed coins since the last evolution.
-  // If that window is too thin, fall back to their whole history.
+// Ranks alive agents best to worst for the current evolution round. Shared by the evolution itself
+// and by the "who dies next" list the site shows (and $HIVE holders vote on).
+async function rankAgents(agents, last, every) {
   const rank = (rows) => {
     const perf = Object.fromEntries(agents.map((a) => [a.id, []]));
     for (const r of rows || []) perf[r.agent_id]?.push(Number(r.score));
@@ -240,17 +226,34 @@ export async function evolveIfDue() {
     const { data: allRows } = await db.from('launches').select('agent_id,score').eq('debriefed', true);
     scored = rank(allRows);
   }
-  // An agent that has been alive a full cycle without getting a single coin out scores zero.
-  // New agents get a grace period: they can't be killed for having no coins until they've been alive
-  // NEW_AGENT_GRACE_MIN (default 2 hours), so a fresh or just-funded agent always gets a fair shot.
+  // New agents get a grace period before they can be killed for having no coins.
   const cutoff = Date.now() - Math.max(every, env('NEW_AGENT_GRACE_MIN', 120) * 60e3);
-  const ranked = scored
-    .filter((x) => x.n > 0 || new Date(x.a.born_at).getTime() <= cutoff)
-    .sort((x, y) => y.avg - x.avg);
-  if (ranked.length < 3) {
-    console.log(`evolution waiting: only ${ranked.length} agents can be ranked so far`);
+  return scored.filter((x) => x.n > 0 || new Date(x.a.born_at).getTime() <= cutoff).sort((x, y) => y.avg - x.avg);
+}
+
+// The agents that could die at the next evolution: the bottom few, never the top two (they breed).
+const AT_RISK = () => env('AT_RISK_COUNT', 3);
+function atRiskFrom(ranked) { return ranked.slice(2).slice(-AT_RISK()); }
+
+export async function evolveIfDue() {
+  const last = await getState('last_evolve', null);
+  const every = env('EVOLVE_EVERY_HOURS', 24) * 3600e3;
+  if (!last) {
+    await setState('last_evolve', new Date().toISOString());
+    await setState('next_evolve_at', new Date(Date.now() + every).toISOString());
     return;
   }
+  // Keep the site's evolution timer in sync even if the interval setting changed.
+  await setState('next_evolve_at', new Date(new Date(last).getTime() + every).toISOString());
+
+  const agents = await aliveAgents();
+  const ranked = agents.length >= 3 ? await rankAgents(agents, last, every) : [];
+  const risk = ranked.length >= 3 ? atRiskFrom(ranked) : [];
+  await setState('at_risk', { round: last, agents: risk.map((x) => ({ id: x.a.id, avg: Number(x.avg.toFixed(1)), coins: x.n })) });
+
+  if (Date.now() - new Date(last).getTime() < every) return;
+  if (agents.length < env('MIN_ALIVE', 4)) return;
+  if (ranked.length < 3) { console.log(`evolution waiting: only ${ranked.length} agents can be ranked so far`); return; }
 
   await setState('last_evolve', new Date().toISOString());
   await setState('next_evolve_at', new Date(Date.now() + every).toISOString());
@@ -259,7 +262,22 @@ export async function evolveIfDue() {
   // A big hive loses more than one agent per evolution, but never below MIN_ALIVE and never a parent.
   const wanted = Math.max(1, Math.min(env('EVOLVE_KILLS', 1), Math.floor(agents.length * 0.15)));
   const kills = Math.min(wanted, agents.length - env('MIN_ALIVE', 4));
-  const victims = ranked.slice(2).slice(-kills);
+  let victims = ranked.slice(2).slice(-kills);
+
+  // $HIVE holders: if anyone voted this round, the most-voted at-risk agents die instead.
+  const { data: votes } = await db.from('votes').select('agent_id,weight').eq('round', last);
+  if (votes?.length) {
+    const riskIds = new Set(risk.map((x) => x.a.id));
+    const tally = {};
+    for (const v of votes) if (riskIds.has(v.agent_id)) tally[v.agent_id] = (tally[v.agent_id] || 0) + Number(v.weight);
+    const total = Object.values(tally).reduce((s, x) => s + x, 0);
+    const byVotes = risk.filter((x) => tally[x.a.id]).sort((x, y) => tally[y.a.id] - tally[x.a.id]);
+    if (byVotes.length) {
+      victims = [...byVotes.map((x) => ({ ...x, voted: true })), ...victims.filter((v) => !tally[v.a.id])].slice(0, kills);
+      const top = byVotes[0];
+      await post(null, 'evolution', `$HIVE holders voted. ${top.a.name} takes ${Math.round(tally[top.a.id] / total * 100)}% of the vote from ${votes.length} holder${votes.length === 1 ? '' : 's'}.`);
+    }
+  }
   for (const v of victims) await kill(v);
 
   await breed(p1, p2, agents.length - victims.length);
@@ -267,7 +285,7 @@ export async function evolveIfDue() {
 
 async function kill(v) {
   const worst = v.a;
-  const why = v.n ? `Lowest average score (${v.avg.toFixed(1)})` : 'Never got a coin out';
+  const why = v.voted ? 'Voted out by $HIVE holders' : v.n ? `Lowest average score (${v.avg.toFixed(1)})` : 'Never got a coin out';
 
   const last_words = await think(agentSystem(worst),
     `${v.n ? `You performed worst in the colony (avg score ${v.avg.toFixed(1)})` : 'You never managed to launch a single coin'} and are being killed. Return {"last_words": "your final message, max 200 chars"}`);

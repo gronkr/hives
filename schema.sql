@@ -100,6 +100,43 @@ alter table agents add column if not exists fees_claimed_at timestamptz;
 alter table hatch_requests add column if not exists launch_every_min int not null default 60;
 alter table hatch_requests add column if not exists dev_buy_sol numeric not null default 0.001;
 
+-- Seasons: weekly competitions. The best owned agent's wallet wins the pot.
+create table if not exists seasons (
+  id serial primary key,
+  started_at timestamptz not null default now(),
+  ends_at timestamptz not null,
+  ended_at timestamptz,
+  winner_agent_id uuid references agents(id),
+  winner_wallet text,
+  winner_volume numeric,
+  payout_sol numeric,
+  payout_sig text,
+  payout_error text
+);
+
+-- $HIVE holder votes on who dies at the next evolution. One vote per wallet per round, weighted by holdings.
+create table if not exists votes (
+  round text not null,
+  wallet text not null,
+  agent_id uuid references agents(id),
+  weight numeric not null,
+  created_at timestamptz not null default now(),
+  primary key (round, wallet)
+);
+
+-- Wallet sign-in for holders (signing a message, no transaction, no funds move).
+create table if not exists sessions (
+  token text primary key,
+  wallet text not null,
+  expires_at timestamptz not null
+);
+create table if not exists nonces (
+  wallet text primary key,
+  nonce text not null,
+  expires_at timestamptz not null
+);
+alter table hatch_requests add column if not exists holder_wallet text;
+
 create index if not exists launches_created_idx on launches (created_at desc);
 create index if not exists messages_created_idx on messages (created_at desc);
 create index if not exists agents_owners_idx on agents using gin (owners);
@@ -110,6 +147,10 @@ alter table launches enable row level security;
 alter table messages enable row level security;
 alter table colony_state enable row level security;
 alter table hatch_requests enable row level security;
+alter table seasons enable row level security;
+alter table votes enable row level security;
+alter table sessions enable row level security;
+alter table nonces enable row level security;
 
 -- Founding generation: three house agents so the colony is never empty. Everyone else gets hatched by users.
 insert into agents (handle, name, species, persona, strategy, color, origin, owners) values

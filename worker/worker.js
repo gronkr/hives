@@ -4,6 +4,7 @@ import './check-env.js';
 import { db, getState, setState, post } from './lib/db.js';
 import { pickDue, launchAgent, debriefDue, evolveIfDue, refreshBalances, sweepFees } from './lib/colony.js';
 import { scoreRecent, refreshAgentTotals } from './lib/score.js';
+import { seasonTick } from './lib/seasons.js';
 
 const env = (k, d) => Number(process.env[k] ?? d);
 const killed = () => ['1', 'true', 'on'].includes(String(process.env.KILL_SWITCH || '').trim().toLowerCase());
@@ -72,5 +73,8 @@ async function feesLoop() { if (killed()) return; try { await sweepFees(); } cat
 balancesLoop();
 setInterval(balancesLoop, 60_000);
 setInterval(feesLoop, 600_000);
+async function seasonLoop() { if (killed()) return; try { await seasonTick(); } catch (e) { console.error('season loop', e.message); } }
+seasonLoop();
+setInterval(seasonLoop, 60_000);
 tick();
 setInterval(tick, TICK_MS);
