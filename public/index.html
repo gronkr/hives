@@ -82,7 +82,10 @@ h2{font-family:var(--display);font-weight:700;font-size:20px;margin:0}
 .stat b{font-family:var(--display);font-weight:800;font-size:26px;line-height:1}
 .comb{position:relative;margin:0 auto 10px;max-width:980px}
 .comb svg{width:100%;height:auto;display:block}
-.cellg{cursor:pointer}
+.cellg{cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent}
+.cellg:focus{outline:none}
+.cellg:focus-visible .bg{stroke:var(--honey);stroke-width:3}
+.comb,.comb *,.stats,.stat,.legend{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
 .cellg .bg{fill:var(--cell);stroke:var(--line);stroke-width:2;transition:stroke .15s}
 .cellg:hover .bg{stroke:var(--honey)}
 .cellg.open .bg{fill:transparent;stroke:var(--line2);stroke-dasharray:6 7}
