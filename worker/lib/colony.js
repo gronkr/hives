@@ -299,8 +299,10 @@ Return {
   let handle = String(child.handle).toLowerCase().replace(/[^a-z]/g, '').slice(0, 16) || 'spawn';
   const { data: clash } = await db.from('agents').select('id').eq('handle', handle).maybeSingle();
   if (clash) handle += Math.floor(Math.random() * 900 + 100);
+  // A child with no owners (both parents were house agents) stays a house agent, paid by the house wallet.
+  const childOwners = [...new Set([...(p1.owners || []), ...(p2.owners || [])])];
   let w = null;
-  try { w = await createWallet(); } catch (e) { console.error('child wallet failed', e.message); }
+  if (childOwners.length) { try { w = await createWallet(); } catch (e) { console.error('child wallet failed', e.message); } }
   const { data: born } = await db.from('agents').insert({
     handle,
     wallet: w?.wallet || null, api_key: w?.apiKey || null, private_key: w?.privateKey || null,
@@ -314,8 +316,8 @@ Return {
     color: /^#[0-9a-f]{6}$/i.test(child.color) ? child.color : '#FFB21A',
     generation: Math.max(p1.generation, p2.generation) + 1,
     parents: [p1.handle, p2.handle],
-    owners: [...new Set([...(p1.owners || []), ...(p2.owners || [])])],
-    origin: 'bred',
+    owners: childOwners,
+    origin: childOwners.length ? 'bred' : 'founder',
   }).select('id').single();
   const co = [...new Set([...(p1.owners || []), ...(p2.owners || [])])].map((o) => '@' + o).join(' and ');
   await post(null, 'evolution', `${p1.name} and ${p2.name} produced a new agent: ${child.name} (${child.species}), generation ${Math.max(p1.generation, p2.generation) + 1}.${co ? ` It belongs to ${co}. Its wallet is empty until they feed it.` : ''}`);

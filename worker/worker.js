@@ -8,7 +8,7 @@ import { scoreRecent, refreshAgentTotals } from './lib/score.js';
 const env = (k, d) => Number(process.env[k] ?? d);
 const killed = () => ['1', 'true', 'on'].includes(String(process.env.KILL_SWITCH || '').trim().toLowerCase());
 const TICK_MS = 20_000;
-let lastScore = 0, lastBalances = 0, lastSweep = 0;
+let lastScore = 0;
 let busy = false;
 
 async function tick() {
@@ -20,16 +20,12 @@ async function tick() {
     // Scoring every 2 minutes
     if (Date.now() - lastScore > 120_000) {
       lastScore = Date.now();
-      await scoreRecent();
-      await refreshAgentTotals();
+      try { await scoreRecent(); await refreshAgentTotals(); } catch (e) { console.error('scoring error', e.message); }
     }
 
-    await debriefDue();
-    await evolveIfDue();
+    try { await debriefDue(); } catch (e) { console.error('debrief error', e.message); }
+    try { await evolveIfDue(); } catch (e) { console.error('evolve error', e.message); }
 
-    // Balances for the site every 2 minutes, fee sweeps every 10.
-    if (Date.now() - lastBalances > 120_000) { lastBalances = Date.now(); await refreshBalances(); }
-    if (Date.now() - lastSweep > 600_000) { lastSweep = Date.now(); await sweepFees(); }
 
   } catch (e) {
     console.error('tick error', e);
@@ -69,5 +65,12 @@ async function launchLoop() {
   finally { picking = false; }
 }
 setInterval(launchLoop, 8000);
+
+// Balances and fee sweeps run on their own, so an error anywhere else can never stop them.
+async function balancesLoop() { try { await refreshBalances(); } catch (e) { console.error('balances loop', e.message); } }
+async function feesLoop() { if (killed()) return; try { await sweepFees(); } catch (e) { console.error('fee sweep loop', e.message); } }
+balancesLoop();
+setInterval(balancesLoop, 60_000);
+setInterval(feesLoop, 600_000);
 tick();
 setInterval(tick, TICK_MS);
