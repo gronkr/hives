@@ -71,10 +71,11 @@ async function launchAs(agent) {
 
   // A user-written agent gets its personality checked once before it ever launches.
   if (agent.origin === 'user' && !agent.launches && !agent.lessons) {
-    const ok = await isCleanPersona(agent);
-    if (!ok) {
-      await db.from('agents').update({ alive: false, died_at: new Date().toISOString(), cause_of_death: 'Rejected by the hive: personality broke the rules' }).eq('id', agent.id);
-      await post(null, 'evolution', `${agent.name} was rejected by the hive before its first launch. Its personality broke the rules.`);
+    const check = await isCleanPersona(agent);
+    if (!check.ok) {
+      console.log(`persona rejected ${agent.handle}: ${check.why}`);
+      await db.from('agents').update({ alive: false, died_at: new Date().toISOString(), cause_of_death: `Rejected by the hive: ${check.why || 'personality broke the rules'}` }).eq('id', agent.id);
+      await post(null, 'evolution', `${agent.name} was rejected by the hive before its first launch (${check.why || 'personality broke the rules'}). Its wallet and SOL are untouched.`);
       return;
     }
     await db.from('agents').update({ lessons: '- (no lessons yet, this is my first launch)' }).eq('id', agent.id);
@@ -240,7 +241,9 @@ export async function evolveIfDue() {
     scored = rank(allRows);
   }
   // An agent that has been alive a full cycle without getting a single coin out scores zero.
-  const cutoff = Date.now() - every;
+  // New agents get a grace period: they can't be killed for having no coins until they've been alive
+  // NEW_AGENT_GRACE_MIN (default 2 hours), so a fresh or just-funded agent always gets a fair shot.
+  const cutoff = Date.now() - Math.max(every, env('NEW_AGENT_GRACE_MIN', 120) * 60e3);
   const ranked = scored
     .filter((x) => x.n > 0 || new Date(x.a.born_at).getTime() <= cutoff)
     .sort((x, y) => y.avg - x.avg);
@@ -321,11 +324,13 @@ Return {
 
 // Refreshes every alive owner-funded agent's balance so the site shows it. Cheap: one RPC call.
 export async function refreshBalances() {
-  const { data } = await db.from('agents').select('id,wallet').eq('alive', true).not('wallet', 'is', null);
+  const { data } = await db.from('agents').select('id,wallet').not('wallet', 'is', null);
   if (!data?.length) return;
   try {
     const bals = await balancesSol(data.map((a) => a.wallet));
-    for (const a of data) if (bals[a.wallet] != null) await db.from('agents').update({ balance_sol: bals[a.wallet], balance_checked_at: new Date().toISOString() }).eq('id', a.id);
+    let n = 0;
+    for (const a of data) if (bals[a.wallet] != null) { n++; await db.from('agents').update({ balance_sol: bals[a.wallet], balance_checked_at: new Date().toISOString() }).eq('id', a.id); }
+    console.log(`balances updated for ${n}/${data.length} agents`);
   } catch (e) { console.error('balances', e.message); }
 }
 

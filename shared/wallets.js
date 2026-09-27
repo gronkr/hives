@@ -15,30 +15,45 @@ export async function createWallet() {
   return { wallet: j.walletPublicKey, apiKey: j.apiKey, privateKey: j.privateKey };
 }
 
-const rpc = () => process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+// Tries your own RPC first (SOLANA_RPC_URL, e.g. a free Helius link), then public ones.
+// The default public Solana RPC often blocks servers like Railway, so there are backups.
+const RPCS = () => [process.env.SOLANA_RPC_URL, 'https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'].filter(Boolean);
+
+async function rpcCall(method, params) {
+  let last;
+  for (const url of RPCS()) {
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+      if (!res.ok) throw new Error(`${res.status} from ${new URL(url).host}`);
+      const j = await res.json();
+      if (j.error) throw new Error(`${j.error.message} from ${new URL(url).host}`);
+      return j.result;
+    } catch (e) { last = e; }
+  }
+  throw last || new Error('no RPC answered');
+}
 
 // SOL balance of one address.
 export async function balanceSol(address) {
-  const res = await fetch(rpc(), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [address] }),
-  });
-  const j = await res.json();
-  if (j.error) throw new Error(j.error.message);
-  return (j.result?.value || 0) / 1e9;
+  const r = await rpcCall('getBalance', [address]);
+  return (r?.value || 0) / 1e9;
 }
 
-// SOL balances of many addresses in one call.
+// SOL balances of many addresses. One call when possible, one-by-one if the batch call is refused.
 export async function balancesSol(addresses) {
   if (!addresses.length) return {};
-  const res = await fetch(rpc(), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getMultipleAccounts', params: [addresses, { encoding: 'base64' }] }),
-  });
-  const j = await res.json();
-  if (j.error) throw new Error(j.error.message);
   const out = {};
-  (j.result?.value || []).forEach((acc, i) => { out[addresses[i]] = (acc?.lamports || 0) / 1e9; });
+  try {
+    for (let i = 0; i < addresses.length; i += 100) {
+      const chunk = addresses.slice(i, i + 100);
+      const r = await rpcCall('getMultipleAccounts', [chunk, { encoding: 'base64', dataSlice: { offset: 0, length: 0 } }]);
+      (r?.value || []).forEach((acc, j) => { out[chunk[j]] = (acc?.lamports || 0) / 1e9; });
+    }
+    return out;
+  } catch (e) {
+    console.error('batch balance check failed, checking one by one:', e.message);
+  }
+  for (const a of addresses) { try { out[a] = await balanceSol(a); } catch (e) { console.error('balance check failed for', a, e.message); } }
   return out;
 }
 

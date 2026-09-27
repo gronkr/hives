@@ -38,3 +38,9 @@ export async function ownedAlive(owner) {
 // Quick keyword screen for user-written agents. The brain check happens in the worker before the agent's first launch too.
 const BLOCKED = /(nazi|hitler|rape|pedo|loli|\bcp\b|isis|kkk|terror|school ?shoot|9\/11|nigg|fagg|retard)/i;
 export const isOffensive = (t) => BLOCKED.test(String(t || ''));
+
+// The alive agent an X account hatched itself, if any, so the site can point them to it.
+export async function existingFor(owner) {
+  const { data } = await db.from('agents').select('handle,name').eq('alive', true).eq('origin', 'user').contains('owners', [owner]).limit(1).maybeSingle();
+  return data || null;
+}

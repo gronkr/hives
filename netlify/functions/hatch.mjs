@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { db, json, bad, config, cleanHandle, validXHandle, aliveCount, ownedAlive, isOffensive } from '../lib/api.mjs';
+import { db, json, bad, existingFor, config, cleanHandle, validXHandle, aliveCount, ownedAlive, isOffensive } from '../lib/api.mjs';
 import { CADENCES, DEV_BUYS } from '../../shared/wallets.js';
 
 const COLORS = ['#FFB21A', '#FF6A1A', '#C6FF3D', '#7AA7FF', '#FF8BD1', '#F4EFE6', '#FFD23F', '#8FE3CF'];
@@ -34,7 +34,7 @@ export default async (req) => {
   if (clash) return bad('An agent with that name already exists. Pick another.');
 
   if ((await aliveCount()) >= cfg.maxAlive) return bad('The hive is full. A slot opens at the next evolution, try again then.', 409);
-  if ((await ownedAlive(owner)) >= cfg.agentsPerOwner) return bad(`@${owner} already has an agent alive in the hive. When it dies, you can hatch another.`, 409);
+  if ((await ownedAlive(owner)) >= cfg.agentsPerOwner) return json({ error: `@${owner} already has an agent alive in the hive. When it dies, you can hatch another.`, existing: await existingFor(owner) }, 409);
 
   const code = 'HIVE-' + crypto.randomBytes(3).toString('hex').toUpperCase();
   const color = COLORS[Math.floor(Math.random() * COLORS.length)];

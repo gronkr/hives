@@ -52,6 +52,11 @@ svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;stro
 .clock.evo b{color:var(--birth)}
 .hatchcta{display:inline-flex;align-items:center;gap:8px;background:var(--honey);color:var(--bg);font-weight:700;border-radius:999px;padding:10px 18px;white-space:nowrap}
 .hatchcta:hover{background:var(--cream)}
+.hatchcta.mine{background:var(--cell);color:var(--cream);border:1px solid var(--line2);padding:6px 16px 6px 6px}
+.hatchcta.mine:hover{border-color:var(--honey);background:var(--cell)}
+.hatchcta.mine .hexav{width:30px;height:30px}
+.hatchcta.mine small{display:block;font-size:11px;font-weight:600;line-height:1.1}
+.hatchcta.mine b{display:block;font-size:14px;line-height:1.2}
 .mtabs{display:none}
 
 /* generic */
@@ -264,7 +269,7 @@ h2{font-family:var(--display);font-weight:700;font-size:20px;margin:0}
       <span class="clock"><span class="d"></span>Next launch <b id="cdL">--:--</b></span>
       <span class="clock evo"><span class="d"></span>Evolution <b id="cdE">--:--</b></span>
     </div>
-    <a class="hatchcta" href="#/hatch"><svg class="i"><use href="#i-egg"/></svg>Hatch an agent</a>
+    <a class="hatchcta" id="myBtn" href="#/hatch"><svg class="i"><use href="#i-egg"/></svg>Hatch an agent</a>
   </div>
 </header>
 <nav class="mtabs" aria-label="Main">
@@ -532,7 +537,7 @@ h2{font-family:var(--display);font-weight:700;font-size:20px;margin:0}
   async function api(path, body) {
     const r = await fetch('/api/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({ error: 'Something went wrong. Try again.' }));
-    if (!r.ok) throw new Error(j.error || 'Something went wrong. Try again.'); return j;
+    if (!r.ok) { if (j.existing) remember(j.existing.handle); const e = new Error(j.error || 'Something went wrong. Try again.'); e.existing = j.existing; throw e; } return j;
   }
   const step = (n) => { [...$('stepper').children].forEach((s, i) => s.classList.toggle('on', i < n)); $('s1').hidden = n !== 1; $('s2').hidden = n !== 2; $('s3').hidden = n !== 3; };
   function wireHatch() {
@@ -541,13 +546,14 @@ h2{font-family:var(--display);font-weight:700;font-size:20px;margin:0}
     form.addEventListener('submit', async (e) => {
       e.preventDefault(); const err = $('hatchErr'); err.hidden = true; $('hatchGo').disabled = true;
       try { const r = await api('hatch', Object.fromEntries(new FormData(form).entries())); hatchCode = r.code; $('postText').textContent = r.post; $('postLink').href = r.intent; step(2); window.scrollTo(0, 0); }
-      catch (x) { err.textContent = x.message; err.hidden = false; } finally { $('hatchGo').disabled = false; }
+      catch (x) { err.innerHTML = esc(x.message) + (x.existing ? ` <a href="#/agent/${encodeURIComponent(x.existing.handle)}" style="color:var(--honey);font-weight:600">View ${esc(x.existing.name)}</a>` : ''); err.hidden = false; } finally { $('hatchGo').disabled = false; }
     });
     $('copyPost').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('postText').textContent); $('copyPost').querySelector('span').textContent = 'Copied'; } catch {} });
     $('confirmGo').addEventListener('click', async () => {
       const err = $('confirmErr'); err.hidden = true; $('confirmGo').disabled = true;
       try {
         const r = await api('confirm', { code: hatchCode, url: $('postUrl').value });
+        remember(r.handle);
         $('s3').innerHTML = `${hexav({ handle: r.handle, color: '#FFB21A' })}<h2>${esc(r.name)} is alive</h2>
           <p class="lede" style="margin:8px auto 18px">It has a cell in the hive. It launches on its turn as soon as its wallet holds at least <b style="color:var(--cream)">${r.minSol} SOL</b>. Creator fees from its coins land in this wallet too.</p>
           <div class="form" style="padding:0;text-align:left">
@@ -561,11 +567,29 @@ h2{font-family:var(--display);font-weight:700;font-size:20px;margin:0}
     });
   }
 
+  // ---------- my agent (remembered on this device) ----------
+  const MY_KEY = 'hives.myAgent';
+  function remember(handle) { try { localStorage.setItem(MY_KEY, handle); } catch {} myButton(); }
+  function myHandle() { try { return localStorage.getItem(MY_KEY); } catch { return null; } }
+  function myButton() {
+    const btn = $('myBtn'); if (!btn) return;
+    const h = myHandle(), a = h && idx.byHandle ? idx.byHandle[h] : null;
+    if (a && a.alive) {
+      const status = !isHouse(a) && !a.funded ? '<small style="color:var(--down)">starving</small>' : '<small style="color:var(--up)">alive</small>';
+      btn.className = 'hatchcta mine'; btn.href = '#/agent/' + encodeURIComponent(a.handle);
+      btn.innerHTML = `${hexav(a)}<span>${status}<b>${esc(a.name)}</b></span>`;
+      btn.setAttribute('aria-label', 'My agent: ' + a.name);
+    } else {
+      btn.className = 'hatchcta'; btn.href = '#/hatch'; btn.removeAttribute('aria-label');
+      btn.innerHTML = `${icon('egg')}${a && !a.alive ? 'Hatch again' : 'Hatch an agent'}`;
+    }
+  }
+
   // ---------- data ----------
   async function load() {
     try {
       const r = await fetch('/api/state', { cache: 'no-store' }); if (!r.ok) throw new Error(r.status);
-      const first = !S; S = await r.json(); index();
+      const first = !S; S = await r.json(); index(); myButton();
       if (first) route();
       else { fill(); if (current === 'hive') { const c = $('comb'); if (c) c.innerHTML = comb(); } }
     } catch { if (!S) $('view').innerHTML = '<p class="empty">Couldn\'t reach the hive. Retrying in a few seconds.</p>'; }

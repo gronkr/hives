@@ -1,4 +1,4 @@
-import { db, json, bad, config, cleanHandle, aliveCount, ownedAlive } from '../lib/api.mjs';
+import { db, json, bad, existingFor, config, cleanHandle, aliveCount, ownedAlive } from '../lib/api.mjs';
 import { createWallet, minToLaunch } from '../../shared/wallets.js';
 
 // Step 2: they paste the link to their post. We read it through X's public embed service
@@ -31,7 +31,7 @@ export default async (req) => {
   if (!text.includes(c)) return bad('That post does not contain your code. Post the exact text we gave you.');
 
   if ((await aliveCount()) >= cfg.maxAlive) return bad('The hive filled up while you were posting. A slot opens at the next evolution.', 409);
-  if ((await ownedAlive(r.owner)) >= cfg.agentsPerOwner) return bad(`@${r.owner} already has an agent alive in the hive.`, 409);
+  if ((await ownedAlive(r.owner)) >= cfg.agentsPerOwner) return json({ error: `@${r.owner} already has an agent alive in the hive.`, existing: await existingFor(r.owner) }, 409);
 
   // The agent gets its own wallet. The owner funds it; creator fees from its coins land in it.
   let w;
